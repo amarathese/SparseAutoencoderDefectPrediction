@@ -1,0 +1,146 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sun Aug 13 14:45:49 2023
+
+@author: Amara Dalila
+"""
+
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jan 30 12:23:41 2023
+
+@author: Amara Dalila
+"""
+
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jan 30 08:45:52 2023
+
+@author: Amara Dalila
+"""
+"""
+Created on Sat Jan 28 06:19:46 2023
+
+@author: Amara Dalila
+"""
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from imblearn.over_sampling import SMOTE
+from sklearn.model_selection import train_test_split
+from keras.models import Sequential, Model
+from keras.layers import Dense, Dropout, BatchNormalization, Input
+from keras import regularizers
+from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.linear_model import LogisticRegression
+
+np.set_printoptions(suppress=True)
+# Tensorflow / Keras
+from keras.models import Model, Sequential
+
+from tensorflow import keras # for building Neural Networks
+print('Tensorflow/Keras: %s' % keras.__version__) # print version
+from keras.models import Model, load_model # for creating a Neural Network Autoencoder model
+from keras import Input # for instantiating a keras tensor
+from keras.layers import Dense, LeakyReLU, BatchNormalization # for adding layers to AE model
+from tensorflow.keras.utils import plot_model # for plotting model diagram
+
+# Data manipulation
+import pandas as pd # for data manipulation
+ 
+# Sklearn
+import sklearn # for model evaluation
+from sklearn.preprocessing import MinMaxScaler # For rescaling metrics to fit into 0 to 1 range
+from sklearn.model_selection import train_test_split # for splitting the data into train and test samples
+
+# Visualization
+import matplotlib 
+import matplotlib.pyplot as plt # for plotting model loss
+import graphviz # for showing model diagram
+from sklearn.svm import SVC
+from sklearn.feature_selection import RFE
+from sklearn.model_selection import train_test_split, StratifiedKFold
+
+# importing os.path module 
+import os.path
+  
+ 
+#Step 2: Loading the data
+
+df = pd.read_csv('Data/Ant-1.7.csv')
+#df=pd.from_csv('Data/churn.csv', index_col=None);
+#df.columns = df.columns.str.strip()
+ 
+
+
+ 
+  
+import numpy as np
+import pandas as pd
+from imblearn.over_sampling import SMOTE
+from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.svm import SVC
+from sklearn.feature_selection import SelectKBest, mutual_info_classif
+from sklearn.metrics import classification_report
+
+import numpy as np
+import pandas as pd
+from imblearn.over_sampling import SMOTE
+from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.svm import SVC
+from sklearn.feature_selection import SelectKBest, mutual_info_classif
+from sklearn.metrics import classification_report
+
+#Step 3: Separating the dependent 'bugs' and independent variables 'metrics'
+
+# Load and preprocess data
+df = pd.read_csv('Data/velocity-1.6.csv')
+df[df.columns[-1]] = df[df.columns[-1]].apply(lambda x: 1 if x != 0 else 0)
+y = df[df.columns[-1]]
+X = df.drop(df.columns[-1], axis=1)
+X = X.drop(X.columns[0:3], axis=1)
+
+# Apply Min-Max scaling to features
+scaler = MinMaxScaler()
+X = scaler.fit_transform(X)
+
+# Initialize SVM classifier
+svm_classifier = SVC(kernel='linear')
+
+# Initialize k-fold cross-validation
+k_fold = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+# Lists to store evaluation results
+accuracy_scores = []
+
+for train_idx, test_idx in k_fold.split(X, y):
+    X_train, X_test = X[train_idx], X[test_idx]
+    y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]  # Corrected this line
+    
+    # Apply SMOTE for oversampling the minority class
+    smote = SMOTE(random_state=42)
+    X_resampled, y_resampled = smote.fit_resample(X_train, y_train)
+    
+    # Calculate Information Gain for each feature
+    information_gains = mutual_info_classif(X_resampled, y_resampled)
+    
+    # Sort features based on Information Gain
+    selected_feature_indices = np.argsort(information_gains)[-10:]  # Select top 10 features
+    
+    # Use selected features to filter X_train and X_test
+    X_train_selected = X_resampled[:, selected_feature_indices]
+    X_test_selected = X_test[:, selected_feature_indices]
+    
+    # Train the SVM classifier on selected features
+    svm_classifier.fit(X_train_selected, y_resampled)
+    
+    # Make predictions on selected feature test data
+    y_pred = svm_classifier.predict(X_test_selected)
+    
+    # Calculate accuracy and store it
+    accuracy = np.mean(y_pred == y_test)
+    accuracy_scores.append(accuracy)
+
+# Calculate mean accuracy across folds
+mean_accuracy = np.mean(accuracy_scores)
+print("Mean Accuracy:", mean_accuracy)
