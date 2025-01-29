@@ -1,0 +1,170 @@
+from google.colab import drive
+drive.mount('/content/drive')
+
+# Libraries
+import numpy as np
+import pandas as pd
+from imblearn.over_sampling import SMOTE
+from sklearn.model_selection import StratifiedKFold
+from sklearn.preprocessing import MinMaxScaler
+from keras.models import Model
+from keras.layers import Dense, BatchNormalization, Input
+from keras import regularizers
+from sklearn.utils import shuffle
+from sklearn.metrics import (
+    accuracy_score,
+    precision_recall_fscore_support,
+    precision_recall_curve,
+    auc,
+)
+import tensorflow as tf
+from collections import Counter
+
+# Set seeds for reproducibility
+np.random.seed(42)
+tf.random.set_seed(42)
+
+# Load and preprocess data
+df = pd.read_csv('/content/drive/My Drive/Data/xerces-1.2.csv')
+df[df.columns[-1]] = df[df.columns[-1]].apply(lambda x: 1 if x != 0 else 0)
+target = df[df.columns[-1]]
+selected_metrics = ['wmc','dit','dam','cam','cbm', 'cbo', 'lcom','ca', 'rfc']
+features = df[selected_metrics]
+
+# Number of folds for cross-validation
+n_folds = 5
+skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
+
+# Variables to store the best metrics
+best_accuracy = 0.0
+best_f1_score = 0.0
+best_pr_auc = 0.0
+best_metrics = None
+best_average_metrics_defect = None
+best_average_metrics_no_defect = None
+
+# Cross-validation loop
+for fold, (train_index, val_index) in enumerate(skf.split(features, target)):
+    print(f"\nFold {fold + 1}/{n_folds}")
+
+    # Split data into training and validation sets
+    x_train_fold, x_val_fold = features.iloc[train_index], features.iloc[val_index]
+    y_train_fold, y_val_fold = target.iloc[train_index], target.iloc[val_index]
+
+    # Apply SMOTE to balance class distribution for training set
+    smote = SMOTE(random_state=42)
+    x_train_fold_resampled, y_train_fold_resampled = smote.fit_resample(x_train_fold, y_train_fold)
+
+    # Apply Min-Max scaling to features for training and validation sets
+    scaler = MinMaxScaler()
+    x_train_fold_resampled_scaled = scaler.fit_transform(x_train_fold_resampled)
+    x_val_fold_scaled = scaler.transform(x_val_fold)
+
+    # Define autoencoder architecture
+    input_layer = Input(shape=x_train_fold_resampled_scaled.shape[1:])
+    encoded = Dense(100, activation='sigmoid', activity_regularizer=regularizers.l1(10e-5))(input_layer)
+    encoded = BatchNormalization()(encoded)
+    encoded = Dense(75, activation='sigmoid')(encoded)
+    encoded = BatchNormalization()(encoded)
+    encoded = Dense(50, activation='sigmoid')(encoded)
+    encoded = BatchNormalization()(encoded)
+    encoded = Dense(25, activation='sigmoid')(encoded)
+    encoded = BatchNormalization()(encoded)
+    encoded = Dense(10, activation='sigmoid')(encoded)
+    decoded = Dense(10, activation='sigmoid')(encoded)
+    decoded = BatchNormalization()(decoded)
+    decoded = Dense(25, activation='sigmoid')(decoded)
+    decoded = BatchNormalization()(decoded)
+    decoded = Dense(50, activation='sigmoid')(decoded)
+    decoded = BatchNormalization()(decoded)
+    decoded = Dense(75, activation='sigmoid')(decoded)
+    decoded = BatchNormalization()(decoded)
+    decoded = Dense(100, activation='sigmoid')(decoded)
+    output_layer = Dense(x_train_fold_resampled_scaled.shape[1], activation='sigmoid')(decoded)
+
+    autoencoder = Model(input_layer, output_layer)
+    autoencoder.compile(optimizer="adadelta", loss="mse", metrics=['accuracy'])
+
+    # Shuffle the training data before each epoch
+    x_train_fold_resampled_scaled, y_train_fold_resampled = shuffle(x_train_fold_resampled_scaled, y_train_fold_resampled)
+
+    # Train autoencoder
+    autoencoder.fit(
+        x_train_fold_resampled_scaled,
+        x_train_fold_resampled_scaled,
+        batch_size=15,
+        epochs=100,
+        shuffle=True,
+        validation_split=0.20,
+    )
+
+    # Create encoder model
+    encoder = Model(inputs=input_layer, outputs=encoded)
+
+    # Encode training and validation data
+    x_train_encoded_top_metrics = encoder.predict(x_train_fold_resampled_scaled)
+    x_val_encoded_top_metrics = encoder.predict(x_val_fold_scaled)
+
+    # Define binary classification model
+    classification_input = Input(shape=(x_train_encoded_top_metrics.shape[1],))
+    classifier = Dense(64, activation='relu')(classification_input)
+    classifier = BatchNormalization()(classifier)
+    classifier = Dense(64, activation='relu')(classifier)
+    classifier = BatchNormalization()(classifier)
+    classifier = Dense(64, activation='relu')(classifier)
+    classifier = BatchNormalization()(classifier)
+    classifier = Dense(64, activation='tanh')(classifier)
+    classifier = BatchNormalization()(classifier)
+    classification_output = Dense(1, activation='sigmoid')(classifier)
+
+    classification_model = Model(inputs=classification_input, outputs=classification_output)
+    classification_model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+    # Train classification model
+    classification_model.fit(
+        x_train_encoded_top_metrics,
+        y_train_fold_resampled,
+        batch_size=10,
+        epochs=100,
+        shuffle=True,
+    )
+
+    # Evaluate classification performance
+    y_val_pred_probabilities = classification_model.predict(x_val_encoded_top_metrics)
+    y_val_pred_binary = (y_val_pred_probabilities >= 0.5).astype(int)
+
+    # Metrics
+    fold_accuracy = accuracy_score(y_val_fold, y_val_pred_binary)
+    precision, recall, f1_score, _ = precision_recall_fscore_support(
+        y_val_fold, y_val_pred_binary, average='binary'
+    )
+    precision_vals, recall_vals, _ = precision_recall_curve(y_val_fold, y_val_pred_probabilities)
+    pr_auc = auc(recall_vals, precision_vals)
+
+    print(f"Accuracy: {fold_accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1-Score: {f1_score:.4f}, PR-AUC: {pr_auc:.4f}")
+
+    # Update best metrics
+    if fold_accuracy > best_accuracy:
+        best_accuracy = fold_accuracy
+        best_f1_score = f1_score
+        best_pr_auc = pr_auc
+        best_metrics = selected_metrics
+        best_average_metrics_defect = {}
+        best_average_metrics_no_defect = {}
+
+        # Average metrics for defect and non-defect classes
+        for metric in best_metrics:
+            defect_values = df[df[df.columns[-1]] == 1][metric].values
+            best_average_metrics_defect[metric] = np.mean(defect_values)
+            no_defect_values = df[df[df.columns[-1]] == 0][metric].values
+            best_average_metrics_no_defect[metric] = np.mean(no_defect_values)
+
+# Final results
+print("\nBest Metrics and Results:")
+print(f"Best Accuracy: {best_accuracy:.4f}")
+print(f"Best F1-Score: {best_f1_score:.4f}")
+print(f"Best PR-AUC: {best_pr_auc:.4f}")
+print("\nAverage Metrics for Defect Classes:")
+print(best_average_metrics_defect)
+print("\nAverage Metrics for Non-Defect Classes:")
+print(best_average_metrics_no_defect)
